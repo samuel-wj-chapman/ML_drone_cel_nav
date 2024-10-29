@@ -120,7 +120,7 @@ def normalize_y(y, lat_min, lat_range, long_min, long_range):
 def main():
     # Parse the yaml file
     with open('preprocessor.yml') as config_file:
-        config_data = yaml.load(config_file)
+        config_data = yaml.load(config_file, Loader=yaml.SafeLoader)
         train_val_path = config_data['train_val_path']
         test_path      = config_data['test_path']
         array_path     = config_data['array_path']

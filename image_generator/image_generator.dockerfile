@@ -20,6 +20,7 @@ ADD get_skies.py /
 ADD get_skies_helper.py /
 ADD screenshot.sh /
 ADD default_cfg.ini /
+ADD ssc_gen.yml /
 
 RUN cp default_cfg.ini /usr/share/stellarium/data
 RUN chmod +x screenshot.sh

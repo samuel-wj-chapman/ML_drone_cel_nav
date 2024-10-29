@@ -4,5 +4,5 @@ do
     docker update --memory 1g --memory-swap 2g imgen$i
     
     docker cp ssc_gen.yml imgen$i:/
-    docker exec -d imgen$i ./screenshot.sh
+    docker exec -d imgen$i ./screenshot.sh > output_imgen$i.log 2>&1
 done

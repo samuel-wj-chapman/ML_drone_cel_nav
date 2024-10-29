@@ -7,9 +7,15 @@ import ktrain
 import random
 import yaml
 import os
-
-
-def haversine_loss(y_true, y_pred, denorm=(36.0, 4.0, -78.0, 4.0), R=3443.92):
+'''
+# Latitude settings
+latstart:  61
+latend:    50
+# Longitude settings
+longstart: -15
+longend:   6
+'''
+def haversine_loss(y_true, y_pred, denorm=(50.0, 11.0, -15.0, 21.0), R=3443.92):
     """
     Returns the mean squared haversine distance
     between arrays consisting of lattitudes and
@@ -98,7 +104,7 @@ def haversine_loss(y_true, y_pred, denorm=(36.0, 4.0, -78.0, 4.0), R=3443.92):
 def main():
     # Parse the yaml file
     with open('/training.yml') as config_file:
-        config_data = yaml.load(config_file)
+        config_data = yaml.load(config_file, Loader=yaml.SafeLoader)
         set_path    = config_data['set_path']
         model_path  = config_data['model_path']
         lr          = config_data['lr']

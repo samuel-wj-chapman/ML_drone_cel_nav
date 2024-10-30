@@ -1,3 +1,28 @@
+## Notes
+
+some issues i have had so far apart from general code version updates.
+
+image generation docker does not run with multiple workers as stated i have not found the reason. Work around was just to manually boot several containers and run in unison.
+
+
+used the above and trained with an area over the uk. initiall tests gain far lower accuracy than stated by the original whitepaper.
+
+
+I have updated all the containers so should run more or less out the box now. there is certainly issues with the training of which i will look into next. (original paper gains 5nm my attempt yielded 150nm)
+
+The base idea of this repo is very apealing. i will next convert training and dataprocessing to pytorch. 
+
+
+
+
+
+
+
+
+
+
+
+
 # Toward Automated Celestial Navigation with Deep Learning
 
 #### [Greg Tozzi](https://www.linkedin.com/in/gregorytozzi/) | [Travis Metz](https://www.linkedin.com/in/travis-metz-692985/) | August, 2020

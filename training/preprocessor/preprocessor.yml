@@ -6,16 +6,17 @@ test_path: "/data/image_test"
 array_path: "/data/sets"
 
 # Latitude settings
-latstart:  61
-latend:    50
+latstart:  50
+latrange:  11
+
 # Longitude settings
 longstart: -15
-longend:   6
+longrange:   21
+
 
 # Date and time settings
 dtstart: '2024-11-10T18:00:00'
 dtend:   '2024-11-11T01:00:00'
-
 
 # Train/Val split
 tv_split: 0.1

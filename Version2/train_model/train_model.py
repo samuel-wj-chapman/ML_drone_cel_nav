@@ -10,6 +10,9 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm  # For progress bars
 import matplotlib.pyplot as plt
+from clearml import Task
+
+task = Task.init(project_name='ML_drone_cel_nav', task_name='train_model_base')
 
 # Device configuration (use GPU if available)
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -25,22 +28,9 @@ def load_image(image_path, dim=(224, 224), channels=1):
     image = cv2.resize(image, dim)
     return image
 
-def z_score_normalize(image):
-    # Convert image to float for precision
-    image = image.astype(np.float32)
-    
-    # Calculate mean and standard deviation
-    mean = np.mean(image)
-    std = np.std(image)
-    
-    # Normalize the image
-    normalized_image = (image - mean) / std
-    
-    return normalized_image
-
 def build_input(image_dir, channels=1, dim=(224,224)):
     """
-    Loads all of the images into a single numpy array and applies z-score normalization.
+    Loads all of the images into a single numpy array.
     """
     X = []
     files = os.listdir(image_dir)
@@ -48,9 +38,29 @@ def build_input(image_dir, channels=1, dim=(224,224)):
         if file.endswith('.png'):
             image_path = os.path.join(image_dir, file)
             image = load_image(image_path, channels=channels, dim=dim)
-            normalized_image = z_score_normalize(image)  # Apply z-score normalization
-            X.append(normalized_image)
-    return np.array(X)
+            X.append(image)
+    return (np.array(X) / 255.0)
+
+from concurrent.futures import ThreadPoolExecutor
+
+
+def load_images_parallel(image_dir, channels=1, dim=(224, 224)):
+    """
+    Loads all images in parallel using ThreadPoolExecutor.
+    """
+    files = [file for file in os.listdir(image_dir) if file.endswith('.png')]
+    
+    def load_and_process(file):
+        image_path = os.path.join(image_dir, file)
+        return load_image(image_path, channels=channels, dim=dim)
+    
+    with ThreadPoolExecutor() as executor:
+        images = list(tqdm(executor.map(load_and_process, files), total=len(files), desc='Loading images'))
+    
+    return np.array(images) / 255.0
+
+
+
 
 def build_labels(image_dir):
     """
@@ -108,10 +118,6 @@ class CelestialDataset(Dataset):
         time = self.times[idx]
         label = self.labels[idx]
         return image, time, label
-    
-
-
-
 class CelestialCNN(nn.Module):
     def __init__(self):
         super(CelestialCNN, self).__init__()
@@ -158,8 +164,6 @@ class CelestialCNN(nn.Module):
         x = self.sigmoid(x)
         return x
 
-
-
 def haversine_loss(y_true, y_pred, denorm, R=3443.92):
     """
     Computes the mean Haversine distance between true and predicted coordinates.
@@ -203,10 +207,6 @@ def main():
     epochs = 1000  # Set the number of epochs
     batch_size = 64  # Set the batch size
 
-    patience = 10  # Number of epochs to wait for improvement
-    best_val_loss = float('inf')
-    epochs_no_improve = 0
-
     # Derived variables
     latrange = latend - latstart
     longrange = longend - longstart
@@ -214,7 +214,8 @@ def main():
 
     # Load and preprocess data
     print('Loading and preprocessing training and validation sets...')
-    X = build_input(train_val_path, channels=1, dim=(224,224))
+    X = load_images_parallel(train_val_path, channels=1, dim=(224, 224))
+    #X = build_input(train_val_path, channels=1, dim=(224,224))
     X = np.expand_dims(X, 1)  # Add channel dimension
     y, times = build_labels(train_val_path)
     y_norm = normalize_y(y, latstart, latrange, longstart, longrange)
@@ -238,14 +239,17 @@ def main():
     y_val = y_norm[val_indices]
     t_val = times_norm[val_indices]
 
+    from torch.utils.data import DataLoader
+
     # Create Datasets and DataLoaders
     train_dataset = CelestialDataset(torch.tensor(x_train, dtype=torch.float32),
-                                     torch.tensor(t_train, dtype=torch.float32),
-                                     torch.tensor(y_train, dtype=torch.float32))
+                                    torch.tensor(t_train, dtype=torch.float32),
+                                    torch.tensor(y_train, dtype=torch.float32))
     val_dataset = CelestialDataset(torch.tensor(x_val, dtype=torch.float32),
-                                   torch.tensor(t_val, dtype=torch.float32),
-                                   torch.tensor(y_val, dtype=torch.float32))
+                                torch.tensor(t_val, dtype=torch.float32),
+                                torch.tensor(y_val, dtype=torch.float32))
 
+    # Use multiple workers for data loading
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=batch_size)
     # Check a batch of images
@@ -274,8 +278,12 @@ def main():
     def criterion(y_pred, y_true):
         return haversine_loss(y_true, y_pred, denorm_params)
 
-    optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=1e-5)
+    optimizer = optim.Adam(model.parameters(), lr=lr)
 
+
+    patience = 10  # Number of epochs to wait for improvement
+    best_val_loss = float('inf')
+    epochs_no_improve = 0
 
     # Training loop
     print('Training the model...')
@@ -298,6 +306,7 @@ def main():
             running_loss += loss.item()
             # Update progress bar
             train_loader_tqdm.set_postfix({'Loss': f'{loss.item():.4f}'})
+        task.get_logger().report_scalar("Loss", "Training Loss", iteration=epoch, value=running_loss/len(train_loader))
 
         # Validation
         model.eval()
@@ -315,18 +324,23 @@ def main():
         print(f"Epoch [{epoch+1}/{epochs}], "
               f"Training Loss: {running_loss/len(train_loader):.4f}, "
               f"Validation Loss: {val_loss/len(val_loader):.4f}")
-        
+        task.get_logger().report_scalar("Loss", "Validation Loss", iteration=epoch, value=val_loss/len(val_loader))
+
+        # Check for early stopping
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             epochs_no_improve = 0
             # Save the best model
-            torch.save(model.state_dict(), 'early_stop_best_celestial_model.pth')
+            torch.save(model.state_dict(), 'best_celestial_model.pth')
         else:
             epochs_no_improve += 1
 
-        if epochs_no_improve == patience:
-            print(f"Early stopping triggered after {epoch+1} epochs.")
+        if epochs_no_improve >= patience:
+            print("Early stopping triggered")
             break
+
+
+
 
     # Save the trained model
     torch.save(model.state_dict(), 'celestial_model.pth')
@@ -364,9 +378,12 @@ def main():
 
     # Compute average error in miles using Haversine formula
     avg_error_nm = haversine_loss(ground_truth, predictions, denorm_params).item()
-    avg_error_miles = avg_error_nm * 1.15078  # Convert nautical miles to miles
+    avg_error_miles = avg_error_nm   # Convert nautical miles to miles
 
     print(f"Average error on test set: {avg_error_miles:.2f} miles")
+    task.get_logger().report_scalar("Accuracy", "NM", value=avg_error_miles)
+
 
 if __name__ == '__main__':
     main()
+

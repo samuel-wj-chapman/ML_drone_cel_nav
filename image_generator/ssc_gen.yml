@@ -9,15 +9,15 @@ alt: 89
 fov: 110
 
 # Latitude settings
-latstart:  61
-latend:    50
+latstart:  50
+latend:    54
 
 # Longitude settings
-longstart: -15
-longend:   6
+longstart: -5
+longend:   -1
 
 # Date and time settings
-dtstart: '2024-11-10T18:00:00'
-dtend:   '2024-11-11T06:00:00'
+dtstart: '2024-11-10T20:00:00'
+dtend:   '2024-11-11T00:00:00'
 
 number_images: 10000

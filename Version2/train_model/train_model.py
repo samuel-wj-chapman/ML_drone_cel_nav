@@ -12,7 +12,7 @@ from tqdm import tqdm  # For progress bars
 import matplotlib.pyplot as plt
 from clearml import Task
 
-task = Task.init(project_name='ML_drone_cel_nav', task_name='train_model_base')
+task = Task.init(project_name='ML_drone_cel_nav', task_name='mse loss + new time norm + batch norm and weight decay')
 
 # Device configuration (use GPU if available)
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -97,11 +97,17 @@ def normalize_times(times, t_min, t_max):
     """
     t_min = np.datetime64(t_min)
     t_max = np.datetime64(t_max)
+    # Ensure t_max is after t_min
+    assert t_max > t_min, "t_max should be after t_min"
     # Convert time range to total seconds
     time_range = (t_max - t_min) / np.timedelta64(1, 's')
     # Convert times to seconds from t_min
     seconds_from_t0 = (times - t_min) / np.timedelta64(1, 's')
-    return seconds_from_t0 / time_range
+    # Normalize
+    normalized_times = seconds_from_t0 / time_range
+    # Ensure normalized times are between 0 and 1
+    assert np.all(normalized_times >= 0) and np.all(normalized_times <= 1), "Normalized times not in [0,1]"
+    return normalized_times
 
 
 class CelestialDataset(Dataset):
@@ -118,6 +124,8 @@ class CelestialDataset(Dataset):
         time = self.times[idx]
         label = self.labels[idx]
         return image, time, label
+    
+
 class CelestialCNN(nn.Module):
     def __init__(self):
         super(CelestialCNN, self).__init__()
@@ -131,7 +139,7 @@ class CelestialCNN(nn.Module):
         # Dynamically compute the input size for fc1
         self.feature_size = self._get_conv_output_size()
         self.fc1 = nn.Linear(self.feature_size + 1, 256)  # +1 for the time feature
-        self.dropout = nn.Dropout(0.2)
+        self.dropout = nn.Dropout(0.5)
         self.fc2 = nn.Linear(256, 2)
         self.sigmoid = nn.Sigmoid()
 
@@ -163,6 +171,59 @@ class CelestialCNN(nn.Module):
         x = self.fc2(x)
         x = self.sigmoid(x)
         return x
+
+class CelestialCNN(nn.Module):
+    def __init__(self):
+        super(CelestialCNN, self).__init__()
+        # Convolutional layers with 'same' padding
+        self.conv1 = nn.Conv2d(1, 5, kernel_size=10, padding='same')
+        self.bn1 = nn.BatchNorm2d(5)  # Add batch normalization after conv1
+        self.relu1 = nn.ReLU()
+        self.conv2 = nn.Conv2d(5, 1, kernel_size=10, padding='same')
+        self.bn2 = nn.BatchNorm2d(1)  # Add batch normalization after conv2
+        self.relu2 = nn.ReLU()
+        self.flatten = nn.Flatten()
+        
+        # Dynamically compute the input size for fc1
+        self.feature_size = self._get_conv_output_size()
+        self.fc1 = nn.Linear(self.feature_size + 1, 256)  # +1 for the time feature
+        self.dropout = nn.Dropout(0.5)
+        self.fc2 = nn.Linear(256, 2)
+        self.sigmoid = nn.Sigmoid()
+
+    def _get_conv_output_size(self):
+        """
+        Computes the size of the output from the convolutional layers.
+        """
+        with torch.no_grad():
+            dummy_input = torch.zeros(1, 1, 224, 224)
+            x = self.conv1(dummy_input)
+            x = self.bn1(x)  # Apply batch normalization
+            x = self.relu1(x)
+            x = self.conv2(x)
+            x = self.bn2(x)  # Apply batch normalization
+            x = self.relu2(x)
+            x = self.flatten(x)
+            feature_size = x.shape[1]
+        return feature_size
+
+    def forward(self, image, time):
+        x = self.conv1(image)
+        x = self.bn1(x)  # Apply batch normalization
+        x = self.relu1(x)
+        x = self.conv2(x)
+        x = self.bn2(x)  # Apply batch normalization
+        x = self.relu2(x)
+        x = self.flatten(x)
+        time = time.view(-1, 1)
+        x = torch.cat((x, time), dim=1)
+        x = self.fc1(x)
+        x = self.relu1(x)
+        x = self.dropout(x)
+        x = self.fc2(x)
+        x = self.sigmoid(x)
+        return x
+
 
 def haversine_loss(y_true, y_pred, denorm, R=3443.92):
     """
@@ -196,16 +257,22 @@ def main():
     # Configuration variables
     train_val_path = '/dataset/train'  # Update this path
     test_path = '/dataset/test'  # Update this path
+    #latstart = 50
+    #latend = 61
+    #longstart = -15
+    #longend = 6
+
     latstart = 50
-    latend = 61
-    longstart = -15
-    longend = 6
-    dtstart = '2024-11-10T18:00:00'
-    dtend = '2024-11-11T01:00:00'
+    latend = 54
+    longstart = -5
+    longend = -1
+
+    dtstart = '2024-11-10T20:00:00'
+    dtend = '2024-11-11T00:00:00'
     tv_split = 0.1
-    lr = 0.001
+    lr = 0.002 #changed from 001
     epochs = 1000  # Set the number of epochs
-    batch_size = 64  # Set the batch size
+    batch_size = 32  # Set the batch size
 
     # Derived variables
     latrange = latend - latstart
@@ -214,7 +281,7 @@ def main():
 
     # Load and preprocess data
     print('Loading and preprocessing training and validation sets...')
-    X = load_images_parallel(train_val_path, channels=1, dim=(224, 224))
+    X = load_images_parallel(train_val_path, channels=1, dim=(224, 224)) #purely to speed up processing
     #X = build_input(train_val_path, channels=1, dim=(224,224))
     X = np.expand_dims(X, 1)  # Add channel dimension
     y, times = build_labels(train_val_path)
@@ -271,17 +338,20 @@ def main():
     print("Times min:", t_train.min(), "max:", t_train.max())
 
 
+    from torch.optim.lr_scheduler import ReduceLROnPlateau
 
     # Initialize model, loss function, and optimizer
     model = CelestialCNN().to(device)
     # Use haversine_loss as the criterion
-    def criterion(y_pred, y_true):
-        return haversine_loss(y_true, y_pred, denorm_params)
+    #def criterion(y_pred, y_true):
+    #    return haversine_loss(y_true, y_pred, denorm_params)
+    criterion = nn.MSELoss()
+    # Add weight decay to the optimizer
+    optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=1e-5)
 
-    optimizer = optim.Adam(model.parameters(), lr=lr)
+    scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=20, verbose=True)
 
-
-    patience = 10  # Number of epochs to wait for improvement
+    patience = 40  # Number of epochs to wait for improvement
     best_val_loss = float('inf')
     epochs_no_improve = 0
 
@@ -322,10 +392,10 @@ def main():
                 val_loss += loss.item()
 
         print(f"Epoch [{epoch+1}/{epochs}], "
-              f"Training Loss: {running_loss/len(train_loader):.4f}, "
-              f"Validation Loss: {val_loss/len(val_loader):.4f}")
+              f"Training Loss: {running_loss/len(train_loader):.6f}, "
+              f"Validation Loss: {val_loss/len(val_loader):.6f}")
         task.get_logger().report_scalar("Loss", "Validation Loss", iteration=epoch, value=val_loss/len(val_loader))
-
+        scheduler.step(val_loss)
         # Check for early stopping
         if val_loss < best_val_loss:
             best_val_loss = val_loss
@@ -380,8 +450,8 @@ def main():
     avg_error_nm = haversine_loss(ground_truth, predictions, denorm_params).item()
     avg_error_miles = avg_error_nm   # Convert nautical miles to miles
 
-    print(f"Average error on test set: {avg_error_miles:.2f} miles")
-    task.get_logger().report_scalar("Accuracy", "NM", value=avg_error_miles)
+    print(f"Average error on test set: {avg_error_miles:.2f} n miles")
+    task.get_logger().report_scalar("Accuracy", "NM", value=avg_error_miles, iteration=epoch)
 
 
 if __name__ == '__main__':

@@ -20,7 +20,7 @@ def load_image(image_path, dim=(224,224), channels=1):
         image = cv2.imread(image_path, 0)
     else:
         image = cv2.imread(image_path, 1)
-    image = cv2.resize(image, dim)#, interpolation = cv2.INTER_AREA)
+    image = cv2.resize(image, dim, interpolation = cv2.INTER_AREA)
     return image
     
     

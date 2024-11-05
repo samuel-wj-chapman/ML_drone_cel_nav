@@ -12,7 +12,7 @@ from tqdm import tqdm  # For progress bars
 import matplotlib.pyplot as plt
 from clearml import Task
 
-task = Task.init(project_name='ML_drone_cel_nav', task_name='mse loss + new time norm + batch norm and weight decay')
+task = Task.init(project_name='ML_drone_cel_nav', task_name='remove lrw decay')
 
 # Device configuration (use GPU if available)
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -28,6 +28,30 @@ def load_image(image_path, dim=(224, 224), channels=1):
     image = cv2.resize(image, dim)
     return image
 
+'''
+def load_image(image_path, dim=(224, 224), channels=1):
+    """
+    Loads a single image as a Numpy array, applies logarithmic normalization, and resizes it.
+    """
+    if channels == 1:
+        image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+    else:
+        image = cv2.imread(image_path, cv2.IMREAD_COLOR)
+    
+    # Convert image to float32 for precision in calculations
+    image = image.astype(np.float32) / 255.0
+    
+    # Apply logarithmic transformation
+    image = np.log1p(image)  # log1p is log(1 + x), which handles zero values better
+    
+    # Normalize to [0, 1] range
+    image = image / np.log1p(1.0)
+    
+    # Resize the image
+    image = cv2.resize(image, dim)
+    
+    return image
+'''
 def build_input(image_dir, channels=1, dim=(224,224)):
     """
     Loads all of the images into a single numpy array.
@@ -126,7 +150,7 @@ class CelestialDataset(Dataset):
         return image, time, label
     
 
-class CelestialCNN(nn.Module):
+class CelestialCNNoriginal(nn.Module):
     def __init__(self):
         super(CelestialCNN, self).__init__()
         # Convolutional layers with 'same' padding
@@ -172,9 +196,9 @@ class CelestialCNN(nn.Module):
         x = self.sigmoid(x)
         return x
 
-class CelestialCNN(nn.Module):
+class CelestialCNNBest(nn.Module):
     def __init__(self):
-        super(CelestialCNN, self).__init__()
+        super(CelestialCNNBest, self).__init__()
         # Convolutional layers with 'same' padding
         self.conv1 = nn.Conv2d(1, 5, kernel_size=10, padding='same')
         self.bn1 = nn.BatchNorm2d(5)  # Add batch normalization after conv1
@@ -187,9 +211,9 @@ class CelestialCNN(nn.Module):
         # Dynamically compute the input size for fc1
         self.feature_size = self._get_conv_output_size()
         self.fc1 = nn.Linear(self.feature_size + 1, 256)  # +1 for the time feature
-        self.dropout = nn.Dropout(0.5)
+        self.dropout = nn.Dropout(0.2)
         self.fc2 = nn.Linear(256, 2)
-        self.sigmoid = nn.Sigmoid()
+        #self.sigmoid = nn.Sigmoid()
 
     def _get_conv_output_size(self):
         """
@@ -221,9 +245,306 @@ class CelestialCNN(nn.Module):
         x = self.relu1(x)
         x = self.dropout(x)
         x = self.fc2(x)
+        #x = self.sigmoid(x)
+        return x
+    
+
+
+
+class CelestialCNN(nn.Module):
+    def __init__(self):
+        super(CelestialCNN, self).__init__()
+        # Updated convolutional layers with increased filters
+        self.conv1 = nn.Conv2d(1, 4, kernel_size=10, padding='same')
+        self.bn1 = nn.BatchNorm2d(4)
+        self.relu1 = nn.ReLU()
+        
+        self.conv2 = nn.Conv2d(4, 8, kernel_size=10, padding='same')
+        self.bn2 = nn.BatchNorm2d(8)
+        self.relu2 = nn.ReLU()
+        
+        self.conv3 = nn.Conv2d(8, 16, kernel_size=10, padding='same')
+        self.bn3 = nn.BatchNorm2d(16)
+        self.relu3 = nn.ReLU()
+        
+        self.flatten = nn.Flatten()
+        
+        # Dynamically compute the input size for fc1
+        self.feature_size = self._get_conv_output_size()
+        self.fc1 = nn.Linear(self.feature_size + 1, 512)  # +1 for the time feature
+        self.dropout = nn.Dropout(0.5)
+        self.fc2 = nn.Linear(512, 2)
+        self.sigmoid = nn.Sigmoid()
+
+    def _get_conv_output_size(self):
+        """
+        Computes the size of the output from the convolutional layers.
+        """
+        with torch.no_grad():
+            dummy_input = torch.zeros(1, 1, 224, 224)
+            x = self.conv1(dummy_input)
+            x = self.bn1(x)
+            x = self.relu1(x)
+            x = self.conv2(x)
+            x = self.bn2(x)
+            x = self.relu2(x)
+            x = self.conv3(x)
+            x = self.bn3(x)
+            x = self.relu3(x)
+            x = self.flatten(x)
+            feature_size = x.shape[1]
+        return feature_size
+
+    def forward(self, image, time):
+        x = self.conv1(image)
+        x = self.bn1(x)
+        x = self.relu1(x)
+        x = self.conv2(x)
+        x = self.bn2(x)
+        x = self.relu2(x)
+        x = self.conv3(x)
+        x = self.bn3(x)
+        x = self.relu3(x)
+        x = self.flatten(x)
+        time = time.view(-1, 1)
+        x = torch.cat((x, time), dim=1)
+        x = self.fc1(x)
+        x = self.relu1(x)
+        x = self.dropout(x)
+        x = self.fc2(x)
         x = self.sigmoid(x)
         return x
 
+
+
+import torch
+import torch.nn as nn
+
+class CelestialCNN(nn.Module):
+    def __init__(self):
+        super(CelestialCNN, self).__init__()
+        # The input channels increase by 2 to accommodate the coordinate channels
+        self.conv1 = nn.Conv2d(1 + 2, 5, kernel_size=10, padding='same')
+        self.bn1 = nn.BatchNorm2d(5)
+        self.relu1 = nn.ReLU()
+        # Rest of the model remains the same
+        self.conv2 = nn.Conv2d(5, 1, kernel_size=10, padding='same')
+        self.bn2 = nn.BatchNorm2d(1)
+        self.relu2 = nn.ReLU()
+        self.flatten = nn.Flatten()
+        self.feature_size = self._get_conv_output_size()
+        self.fc1 = nn.Linear(self.feature_size + 1, 256)
+        self.dropout = nn.Dropout(0.5)
+        self.fc2 = nn.Linear(256, 2)
+        # Remove sigmoid if using MSELoss
+        # self.sigmoid = nn.Sigmoid()
+
+    def _get_coord_grid(self, batch_size, height, width, device):
+        # Create normalized coordinate grid
+        x_coords = torch.linspace(-1, 1, steps=width).unsqueeze(0).repeat(height, 1)
+        y_coords = torch.linspace(-1, 1, steps=height).unsqueeze(1).repeat(1, width)
+        x_coords = x_coords.unsqueeze(0).unsqueeze(0).repeat(batch_size, 1, 1, 1)
+        y_coords = y_coords.unsqueeze(0).unsqueeze(0).repeat(batch_size, 1, 1, 1)
+        x_coords = x_coords.to(device)
+        y_coords = y_coords.to(device)
+        return x_coords, y_coords
+
+    def forward(self, image, time):
+        batch_size, _, height, width = image.size()
+        x_coords, y_coords = self._get_coord_grid(batch_size, height, width, image.device)
+        # Concatenate image with coordinate channels
+        x = torch.cat([image, x_coords, y_coords], dim=1)
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu1(x)
+        x = self.conv2(x)
+        x = self.bn2(x)
+        x = self.relu2(x)
+        x = self.flatten(x)
+        time = time.view(-1, 1)
+        x = torch.cat((x, time), dim=1)
+        x = self.fc1(x)
+        x = self.relu1(x)
+        x = self.dropout(x)
+        x = self.fc2(x)
+        # Remove sigmoid if using MSELoss
+        # x = self.sigmoid(x)
+        return x
+
+import torch
+import torch.nn as nn
+
+class CelestialCNN(nn.Module): #WithCoordConv
+    def __init__(self, input_height=224, input_width=224):
+        super(CelestialCNN, self).__init__()
+        self.input_height = input_height
+        self.input_width = input_width
+        # Increase input channels from 1 to 3 (original image + x_coords + y_coords)
+        self.conv1 = nn.Conv2d(1 + 2, 5, kernel_size=10, padding='same')
+        self.bn1 = nn.BatchNorm2d(5)
+        self.relu1 = nn.ReLU()
+
+        self.conv2 = nn.Conv2d(5, 1, kernel_size=10, padding='same')
+        self.bn2 = nn.BatchNorm2d(1)
+        self.relu2 = nn.ReLU()
+
+        self.flatten = nn.Flatten()
+
+        # Dynamically compute the input size for fc1
+        self.feature_size = self._get_conv_output_size()
+        self.fc1 = nn.Linear(self.feature_size + 1, 256)  # +1 for the time feature
+        self.dropout = nn.Dropout(0.5)
+        self.fc2 = nn.Linear(256, 2)
+        # Remove sigmoid if using MSELoss
+
+    def _get_conv_output_size(self):
+        """
+        Computes the size of the output from the convolutional layers.
+        """
+        with torch.no_grad():
+            dummy_input = torch.zeros(1, 1, self.input_height, self.input_width)
+            x_coords, y_coords = self._get_coord_grids(1, self.input_height, self.input_width, device='cpu')
+            dummy_input = torch.cat([dummy_input, x_coords, y_coords], dim=1)
+            x = self.conv1(dummy_input)
+            x = self.bn1(x)
+            x = self.relu1(x)
+            x = self.conv2(x)
+            x = self.bn2(x)
+            x = self.relu2(x)
+            x = self.flatten(x)
+            feature_size = x.shape[1]
+        return feature_size
+
+    def _get_coord_grids(self, batch_size, height, width, device):
+        """
+        Generates coordinate grids for the input images.
+
+        Returns:
+            x_coords, y_coords: Tensors of shape (batch_size, 1, height, width)
+        """
+        # Create coordinate grids ranging from -1 to 1
+        x_coords = torch.linspace(-1, 1, steps=width).unsqueeze(0).repeat(height, 1)
+        y_coords = torch.linspace(-1, 1, steps=height).unsqueeze(1).repeat(1, width)
+        x_coords = x_coords.unsqueeze(0).unsqueeze(0).repeat(batch_size, 1, 1, 1)
+        y_coords = y_coords.unsqueeze(0).unsqueeze(0).repeat(batch_size, 1, 1, 1)
+        x_coords = x_coords.to(device)
+        y_coords = y_coords.to(device)
+        return x_coords, y_coords
+
+    def forward(self, image, time):
+        batch_size, _, height, width = image.size()
+        x_coords, y_coords = self._get_coord_grids(batch_size, height, width, image.device)
+        # Concatenate image with coordinate grids
+        x = torch.cat([image, x_coords, y_coords], dim=1)  # New shape: (batch_size, 3, height, width)
+
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu1(x)
+
+        x = self.conv2(x)
+        x = self.bn2(x)
+        x = self.relu2(x)
+
+        x = self.flatten(x)
+        time = time.view(-1, 1)
+        x = torch.cat((x, time), dim=1)
+        x = self.fc1(x)
+        x = self.relu1(x)
+        x = self.dropout(x)
+        x = self.fc2(x)
+        # Remove sigmoid if using MSELoss
+        return x
+
+
+import torch
+import torch.nn as nn
+import numpy as np
+
+import torch
+import torch.nn as nn
+import numpy as np
+
+class CelestialCNN(nn.Module):
+    def __init__(self, input_height=224, input_width=224):
+        super(CelestialCNN, self).__init__()
+        self.input_height = input_height
+        self.input_width = input_width
+        # Input channels increased from 1 to 3 to accommodate positional encodings
+        self.conv1 = nn.Conv2d(3, 5, kernel_size=10, padding='same')
+        self.bn1 = nn.BatchNorm2d(5)
+        self.relu1 = nn.ReLU()
+
+        self.conv2 = nn.Conv2d(5, 1, kernel_size=10, padding='same')
+        self.bn2 = nn.BatchNorm2d(1)
+        self.relu2 = nn.ReLU()
+
+        self.flatten = nn.Flatten()
+
+        # Dynamically compute the input size for fc1
+        self.feature_size = self._get_conv_output_size()
+        self.fc1 = nn.Linear(self.feature_size + 1, 256)  # +1 for the time feature
+        self.dropout = nn.Dropout(0.5)
+        self.fc2 = nn.Linear(256, 2)
+        # Remove the sigmoid activation if using MSELoss
+        #self.sigmoid = nn.Sigmoid()
+
+    def _get_conv_output_size(self):
+        """
+        Computes the size of the output from the convolutional layers.
+        """
+        with torch.no_grad():
+            dummy_input = torch.zeros(1, 1, self.input_height, self.input_width)
+            dummy_pos_encodings = self._get_positional_encodings(1, self.input_height, self.input_width, device='cpu')
+            dummy_input = torch.cat([dummy_input, *dummy_pos_encodings], dim=1)
+            x = self.conv1(dummy_input)
+            x = self.bn1(x)
+            x = self.relu1(x)
+            x = self.conv2(x)
+            x = self.bn2(x)
+            x = self.relu2(x)
+            x = self.flatten(x)
+            
+            feature_size = x.shape[1]
+        return feature_size
+
+    def _get_positional_encodings(self, batch_size, height, width, device):
+        # [Same as before]
+        x_positions = torch.linspace(-1, 1, steps=width).unsqueeze(0).repeat(height, 1)
+        y_positions = torch.linspace(-1, 1, steps=height).unsqueeze(1).repeat(1, width)
+        x_positions = x_positions.unsqueeze(0).repeat(batch_size, 1, 1)
+        y_positions = y_positions.unsqueeze(0).repeat(batch_size, 1, 1)
+
+        x_encodings = torch.sin(x_positions * np.pi)
+        y_encodings = torch.cos(y_positions * np.pi)
+
+        x_encodings = x_encodings.unsqueeze(1).to(device)  # Shape: (batch_size, 1, height, width)
+        y_encodings = y_encodings.unsqueeze(1).to(device)  # Shape: (batch_size, 1, height, width)
+
+        return x_encodings, y_encodings
+
+    def forward(self, image, time):
+        batch_size, _, height, width = image.size()
+        x_encodings, y_encodings = self._get_positional_encodings(batch_size, height, width, image.device)
+        x = torch.cat([image, x_encodings, y_encodings], dim=1)  # New shape: (batch_size, 3, height, width)
+
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu1(x)
+
+        x = self.conv2(x)
+        x = self.bn2(x)
+        x = self.relu2(x)
+
+        x = self.flatten(x)
+        time = time.view(-1, 1)
+        x = torch.cat((x, time), dim=1)
+        x = self.fc1(x)
+        x = self.relu1(x)
+        x = self.dropout(x)
+        x = self.fc2(x)
+        # Remove the sigmoid activation if using MSELoss
+        #x = self.sigmoid(x)
+        return x
 
 def haversine_loss(y_true, y_pred, denorm, R=3443.92):
     """
@@ -341,13 +662,13 @@ def main():
     from torch.optim.lr_scheduler import ReduceLROnPlateau
 
     # Initialize model, loss function, and optimizer
-    model = CelestialCNN().to(device)
+    model = CelestialCNNBest().to(device)
     # Use haversine_loss as the criterion
     #def criterion(y_pred, y_true):
     #    return haversine_loss(y_true, y_pred, denorm_params)
     criterion = nn.MSELoss()
     # Add weight decay to the optimizer
-    optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=1e-5)
+    optimizer = optim.Adam(model.parameters(), lr=lr)#, weight_decay=1e-5)
 
     scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=20, verbose=True)
 
